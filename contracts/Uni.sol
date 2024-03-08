@@ -3,18 +3,21 @@ pragma experimental ABIEncoderV2;
 
 import "./SafeMath.sol";
 
-contract Uni {
+contract VotingJoule {
     /// @notice EIP-20 token name for this token
-    string public constant name = "Uniswap";
+    string public constant name = "vJoule";
 
     /// @notice EIP-20 token symbol for this token
-    string public constant symbol = "UNI";
+    string public constant symbol = "vJ";
 
     /// @notice EIP-20 token decimals for this token
     uint8 public constant decimals = 18;
 
+    /// @notice Max availabe number of tokens
+    uint public maxSupply = 100_000_000_000e18; // 100 billion vJ
+
     /// @notice Total number of tokens in circulation
-    uint public totalSupply = 1_000_000_000e18; // 1 billion Uni
+    uint public totalSupply = 0; // 0 vJ in the beginning
 
     /// @notice Address which may mint new tokens
     address public minter;
@@ -23,10 +26,10 @@ contract Uni {
     uint public mintingAllowedAfter;
 
     /// @notice Minimum time between mints
-    uint32 public constant minimumTimeBetweenMints = 1 days * 365;
+    uint32 public constant minimumTimeBetweenMints = 1 days * 365; // every budget year
 
-    /// @notice Cap on the percentage of totalSupply that can be minted at each mint
-    uint8 public constant mintCap = 2;
+    /// @notice Cap on the percentage/100 of maxSupply that can be minted at each mint
+    uint8 public constant mintCap = 72; // 0.72%
 
     /// @notice Allowance amounts on behalf of others
     mapping (address => mapping (address => uint96)) internal allowances;
@@ -83,7 +86,7 @@ contract Uni {
      * @param mintingAllowedAfter_ The timestamp after which minting may occur
      */
     constructor(address account, address minter_, uint mintingAllowedAfter_) public {
-        require(mintingAllowedAfter_ >= block.timestamp, "Uni::constructor: minting can only begin after deployment");
+        require(mintingAllowedAfter_ >= block.timestamp, "vJ::constructor: minting can only begin after deployment");
 
         balances[account] = uint96(totalSupply);
         emit Transfer(address(0), account, totalSupply);
@@ -97,7 +100,7 @@ contract Uni {
      * @param minter_ The address of the new minter
      */
     function setMinter(address minter_) external {
-        require(msg.sender == minter, "Uni::setMinter: only the minter can change the minter address");
+        require(msg.sender == minter, "vJ::setMinter: only the minter can change the minter address");
         emit MinterChanged(minter, minter_);
         minter = minter_;
     }
@@ -108,25 +111,56 @@ contract Uni {
      * @param rawAmount The number of tokens to be minted
      */
     function mint(address dst, uint rawAmount) external {
-        require(msg.sender == minter, "Uni::mint: only the minter can mint");
-        require(block.timestamp >= mintingAllowedAfter, "Uni::mint: minting not allowed yet");
-        require(dst != address(0), "Uni::mint: cannot transfer to the zero address");
+        require(msg.sender == minter, "vJ::mint: only the minter can mint");
+        require(block.timestamp >= mintingAllowedAfter, "vJ::mint: minting not allowed yet");
+        require(dst != address(0), "vJ::mint: cannot transfer to the zero address");
+
+		// check the supply
+		require(maxSupply >= SafeMath.add(totalSupply, amount), "vJ::mint: exceeded max supply");
+		// FIXME question: should we record totalMint and also check if it exceeds maxSupply?
+		// if vJ are burned and totalSupply shrinks, should re-mint be allowed?
 
         // record the mint
         mintingAllowedAfter = SafeMath.add(block.timestamp, minimumTimeBetweenMints);
 
         // mint the amount
-        uint96 amount = safe96(rawAmount, "Uni::mint: amount exceeds 96 bits");
-        require(amount <= SafeMath.div(SafeMath.mul(totalSupply, mintCap), 100), "Uni::mint: exceeded mint cap");
-        totalSupply = safe96(SafeMath.add(totalSupply, amount), "Uni::mint: totalSupply exceeds 96 bits");
+        uint96 amount = safe96(rawAmount, "vJ::mint: amount exceeds 96 bits");
+        require(amount <= SafeMath.div(SafeMath.mul(maxSupply, mintCap), 10000), "vJ::mint: exceeded mint cap");
+        totalSupply = safe96(SafeMath.add(totalSupply, amount), "vJ::mint: totalSupply exceeds 96 bits");
 
         // transfer the amount to the recipient
-        balances[dst] = add96(balances[dst], amount, "Uni::mint: transfer amount overflows");
+        balances[dst] = add96(balances[dst], amount, "vJ::mint: transfer amount overflows");
         emit Transfer(address(0), dst, amount);
 
         // move delegates
         _moveDelegates(address(0), delegates[dst], amount);
     }
+
+	/**
+	 * @notice Burn tokens
+	 * @param src The address of the account
+	 * @param rawAmount The number of tokens to be burned
+	 */
+	function burn(address src, uint rawAmount) external {
+        address spender = msg.sender;
+        uint96 spenderAllowance = allowances[src][spender];
+        uint96 amount = safe96(rawAmount, "vJ::burn: amount exceeds 96 bits");
+
+        if (spender != src && spenderAllowance != uint96(-1)) {
+            uint96 newAllowance = sub96(spenderAllowance, amount, "vJ::burn: transfer amount exceeds spender allowance");
+            allowances[src][spender] = newAllowance;
+
+            emit Approval(src, spender, newAllowance);
+        }
+
+		// burn the amount
+        balances[dst] = sub96(balances[dst], amount, "vJ::mint: burn amount overflows");
+        totalSupply = safe96(SafeMath.sub(totalSupply, amount), "vJ::burn: totalSupply exceeds 96 bits");
+        emit Transfer(src, address(0), amount);
+
+        // move delegates
+        _moveDelegates(delegates[src], address(0), amount);
+	}
 
     /**
      * @notice Get the number of tokens `spender` is approved to spend on behalf of `account`
@@ -151,7 +185,7 @@ contract Uni {
         if (rawAmount == uint(-1)) {
             amount = uint96(-1);
         } else {
-            amount = safe96(rawAmount, "Uni::approve: amount exceeds 96 bits");
+            amount = safe96(rawAmount, "vJ::approve: amount exceeds 96 bits");
         }
 
         allowances[msg.sender][spender] = amount;
@@ -175,16 +209,16 @@ contract Uni {
         if (rawAmount == uint(-1)) {
             amount = uint96(-1);
         } else {
-            amount = safe96(rawAmount, "Uni::permit: amount exceeds 96 bits");
+            amount = safe96(rawAmount, "vJ::permit: amount exceeds 96 bits");
         }
 
         bytes32 domainSeparator = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name)), getChainId(), address(this)));
         bytes32 structHash = keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, rawAmount, nonces[owner]++, deadline));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         address signatory = ecrecover(digest, v, r, s);
-        require(signatory != address(0), "Uni::permit: invalid signature");
-        require(signatory == owner, "Uni::permit: unauthorized");
-        require(now <= deadline, "Uni::permit: signature expired");
+        require(signatory != address(0), "vJ::permit: invalid signature");
+        require(signatory == owner, "vJ::permit: unauthorized");
+        require(now <= deadline, "vJ::permit: signature expired");
 
         allowances[owner][spender] = amount;
 
@@ -207,7 +241,7 @@ contract Uni {
      * @return Whether or not the transfer succeeded
      */
     function transfer(address dst, uint rawAmount) external returns (bool) {
-        uint96 amount = safe96(rawAmount, "Uni::transfer: amount exceeds 96 bits");
+        uint96 amount = safe96(rawAmount, "vJ::transfer: amount exceeds 96 bits");
         _transferTokens(msg.sender, dst, amount);
         return true;
     }
@@ -222,10 +256,10 @@ contract Uni {
     function transferFrom(address src, address dst, uint rawAmount) external returns (bool) {
         address spender = msg.sender;
         uint96 spenderAllowance = allowances[src][spender];
-        uint96 amount = safe96(rawAmount, "Uni::approve: amount exceeds 96 bits");
+        uint96 amount = safe96(rawAmount, "vJ::approve: amount exceeds 96 bits");
 
         if (spender != src && spenderAllowance != uint96(-1)) {
-            uint96 newAllowance = sub96(spenderAllowance, amount, "Uni::transferFrom: transfer amount exceeds spender allowance");
+            uint96 newAllowance = sub96(spenderAllowance, amount, "vJ::transferFrom: transfer amount exceeds spender allowance");
             allowances[src][spender] = newAllowance;
 
             emit Approval(src, spender, newAllowance);
@@ -257,9 +291,9 @@ contract Uni {
         bytes32 structHash = keccak256(abi.encode(DELEGATION_TYPEHASH, delegatee, nonce, expiry));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         address signatory = ecrecover(digest, v, r, s);
-        require(signatory != address(0), "Uni::delegateBySig: invalid signature");
-        require(nonce == nonces[signatory]++, "Uni::delegateBySig: invalid nonce");
-        require(now <= expiry, "Uni::delegateBySig: signature expired");
+        require(signatory != address(0), "vJ::delegateBySig: invalid signature");
+        require(nonce == nonces[signatory]++, "vJ::delegateBySig: invalid nonce");
+        require(now <= expiry, "vJ::delegateBySig: signature expired");
         return _delegate(signatory, delegatee);
     }
 
@@ -281,7 +315,7 @@ contract Uni {
      * @return The number of votes the account had as of the given block
      */
     function getPriorVotes(address account, uint blockNumber) public view returns (uint96) {
-        require(blockNumber < block.number, "Uni::getPriorVotes: not yet determined");
+        require(blockNumber < block.number, "vJ::getPriorVotes: not yet determined");
 
         uint32 nCheckpoints = numCheckpoints[account];
         if (nCheckpoints == 0) {
@@ -325,11 +359,11 @@ contract Uni {
     }
 
     function _transferTokens(address src, address dst, uint96 amount) internal {
-        require(src != address(0), "Uni::_transferTokens: cannot transfer from the zero address");
-        require(dst != address(0), "Uni::_transferTokens: cannot transfer to the zero address");
+        require(src != address(0), "vJ::_transferTokens: cannot transfer from the zero address");
+        require(dst != address(0), "vJ::_transferTokens: cannot transfer to the zero address");
 
-        balances[src] = sub96(balances[src], amount, "Uni::_transferTokens: transfer amount exceeds balance");
-        balances[dst] = add96(balances[dst], amount, "Uni::_transferTokens: transfer amount overflows");
+        balances[src] = sub96(balances[src], amount, "vJ::_transferTokens: transfer amount exceeds balance");
+        balances[dst] = add96(balances[dst], amount, "vJ::_transferTokens: transfer amount overflows");
         emit Transfer(src, dst, amount);
 
         _moveDelegates(delegates[src], delegates[dst], amount);
@@ -340,21 +374,21 @@ contract Uni {
             if (srcRep != address(0)) {
                 uint32 srcRepNum = numCheckpoints[srcRep];
                 uint96 srcRepOld = srcRepNum > 0 ? checkpoints[srcRep][srcRepNum - 1].votes : 0;
-                uint96 srcRepNew = sub96(srcRepOld, amount, "Uni::_moveVotes: vote amount underflows");
+                uint96 srcRepNew = sub96(srcRepOld, amount, "vJ::_moveVotes: vote amount underflows");
                 _writeCheckpoint(srcRep, srcRepNum, srcRepOld, srcRepNew);
             }
 
             if (dstRep != address(0)) {
                 uint32 dstRepNum = numCheckpoints[dstRep];
                 uint96 dstRepOld = dstRepNum > 0 ? checkpoints[dstRep][dstRepNum - 1].votes : 0;
-                uint96 dstRepNew = add96(dstRepOld, amount, "Uni::_moveVotes: vote amount overflows");
+                uint96 dstRepNew = add96(dstRepOld, amount, "vJ::_moveVotes: vote amount overflows");
                 _writeCheckpoint(dstRep, dstRepNum, dstRepOld, dstRepNew);
             }
         }
     }
 
     function _writeCheckpoint(address delegatee, uint32 nCheckpoints, uint96 oldVotes, uint96 newVotes) internal {
-      uint32 blockNumber = safe32(block.number, "Uni::_writeCheckpoint: block number exceeds 32 bits");
+      uint32 blockNumber = safe32(block.number, "vJ::_writeCheckpoint: block number exceeds 32 bits");
 
       if (nCheckpoints > 0 && checkpoints[delegatee][nCheckpoints - 1].fromBlock == blockNumber) {
           checkpoints[delegatee][nCheckpoints - 1].votes = newVotes;
