@@ -8,6 +8,7 @@ contract Timelock {
     event NewAdmin(address indexed newAdmin);
     event NewPendingAdmin(address indexed newPendingAdmin);
     event NewDelay(uint indexed newDelay);
+    event IncUsage(uint delta);
     event CancelTransaction(bytes32 indexed txHash, address indexed target, uint value, string signature,  bytes data, uint eta);
     event ExecuteTransaction(bytes32 indexed txHash, address indexed target, uint value, string signature,  bytes data, uint eta);
     event QueueTransaction(bytes32 indexed txHash, address indexed target, uint value, string signature, bytes data, uint eta);
@@ -22,13 +23,20 @@ contract Timelock {
 
     mapping (bytes32 => bool) public queuedTransactions;
 
+    // joule budget control
+    // quota available = released - used. released = block_height / MONTHLY_BLOCKS * MONTHLY_BUDGET.
+    uint public MONTHLY_BUDGET;
+    uint public constant MONTHLY_BLOCKS = 175200;
+    uint public used; // used quota of joule
 
-    constructor(address admin_, uint delay_) public {
+    constructor(address admin_, uint delay_, uint monthly_budget_) public {
         require(delay_ >= MINIMUM_DELAY, "Timelock::constructor: Delay must exceed minimum delay.");
         require(delay_ <= MAXIMUM_DELAY, "Timelock::setDelay: Delay must not exceed maximum delay.");
 
         admin = admin_;
         delay = delay_;
+        // set once and only once
+        MONTHLY_BUDGET = monthly_budget_;
     }
 
     function() external payable { }
@@ -57,10 +65,21 @@ contract Timelock {
         emit NewPendingAdmin(pendingAdmin);
     }
 
+    // increate usage for aligning data. NOTICE: cannot decrease it.
+    function incUsage(uint delta) public {
+        require(msg.sender == address(this), "Timelock::incUsage: Call must come from Timelock.");
+        require(delta <= available(), "Timelock::incUsage: Cannot go beyond release schedule.");
+        used = used.add(delta);
+
+        emit IncUsage(delta);
+    }
+
     function queueTransaction(address target, uint value, string memory signature, bytes memory data, uint eta) public returns (bytes32) {
         require(msg.sender == admin, "Timelock::queueTransaction: Call must come from admin.");
         require(eta >= getBlockTimestamp().add(delay), "Timelock::queueTransaction: Estimated execution block must satisfy delay.");
+        require(value == 0 || value <= available(), "Timelock::queuedTransaction: Not enough quota.");
 
+        used = used.add(value);
         bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
         queuedTransactions[txHash] = true;
 
@@ -72,7 +91,13 @@ contract Timelock {
         require(msg.sender == admin, "Timelock::cancelTransaction: Call must come from admin.");
 
         bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
+        bool status = queuedTransactions[txHash];
+        // ensure NOT to repay quota more than once even if being canceled twice or more
+        require(status == true, "Timelock::cancelTransaction: Already canceled.");
+
         queuedTransactions[txHash] = false;
+        //if (status == true)
+        used = used.sub(value);
 
         emit CancelTransaction(txHash, target, value, signature, data, eta);
     }
@@ -107,5 +132,19 @@ contract Timelock {
     function getBlockTimestamp() internal view returns (uint) {
         // solium-disable-next-line security/no-block-members
         return block.timestamp;
+    }
+
+    function getBlockHeight() internal view returns (uint) {
+        return block.number;
+    }
+
+    // calculate released joule till now
+    function released() public view returns (uint) {
+        return getBlockHeight().div(MONTHLY_BLOCKS).mul(MONTHLY_BUDGET);
+    }
+
+    // calculate joule quota available for use
+    function available() public view returns (uint) {
+        return released().sub(used);
     }
 }
