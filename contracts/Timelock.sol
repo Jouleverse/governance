@@ -79,9 +79,14 @@ contract Timelock {
         require(eta >= getBlockTimestamp().add(delay), "Timelock::queueTransaction: Estimated execution block must satisfy delay.");
         require(value == 0 || value <= available(), "Timelock::queuedTransaction: Not enough quota.");
 
-        used = used.add(value);
         bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
+        bool status = queuedTransactions[txHash];
+        // do NOT queue more than once
+        require(status == false, "Timelock::cancelTransaction: Already queued.");
+
         queuedTransactions[txHash] = true;
+        //if (status == false)
+        used = used.add(value);
 
         emit QueueTransaction(txHash, target, value, signature, data, eta);
         return txHash;
@@ -92,7 +97,7 @@ contract Timelock {
 
         bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
         bool status = queuedTransactions[txHash];
-        // ensure NOT to repay quota more than once even if being canceled twice or more
+        // ensure NOT to repay quota more than once
         require(status == true, "Timelock::cancelTransaction: Already canceled.");
 
         queuedTransactions[txHash] = false;
@@ -127,6 +132,12 @@ contract Timelock {
         emit ExecuteTransaction(txHash, target, value, signature, data, eta);
 
         return returnData;
+    }
+
+    // helper to calculate transaction hash just queued
+    function getTransactionHash(address target, uint value, string memory signature, bytes memory data, uint eta) public pure returns (bytes32) {
+        bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
+        return txHash;
     }
 
     function getBlockTimestamp() internal view returns (uint) {
