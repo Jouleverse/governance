@@ -31,7 +31,7 @@ contract Timelock {
 
     constructor(address admin_, uint delay_, uint monthly_budget_) public {
         require(delay_ >= MINIMUM_DELAY, "Timelock::constructor: Delay must exceed minimum delay.");
-        require(delay_ <= MAXIMUM_DELAY, "Timelock::setDelay: Delay must not exceed maximum delay.");
+        require(delay_ <= MAXIMUM_DELAY, "Timelock::constructor: Delay must not exceed maximum delay.");
 
         admin = admin_;
         delay = delay_;
@@ -82,7 +82,7 @@ contract Timelock {
         bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
         bool status = queuedTransactions[txHash];
         // do NOT queue more than once
-        require(status == false, "Timelock::cancelTransaction: Already queued.");
+        require(status == false, "Timelock::queueTransaction: Already queued.");
 
         queuedTransactions[txHash] = true;
         //if (status == false)
@@ -97,7 +97,7 @@ contract Timelock {
 
         bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
         bool status = queuedTransactions[txHash];
-        // ensure NOT to repay quota more than once
+        // ensure NOT to rollback quota more than once
         require(status == true, "Timelock::cancelTransaction: Already canceled.");
 
         queuedTransactions[txHash] = false;
@@ -115,6 +115,10 @@ contract Timelock {
         require(getBlockTimestamp() >= eta, "Timelock::executeTransaction: Transaction hasn't surpassed time lock.");
         require(getBlockTimestamp() <= eta.add(GRACE_PERIOD), "Timelock::executeTransaction: Transaction is stale.");
 
+        // ensure we have enough joule before execution
+        require(value <= address(this).balance, "Timelock::executeTransaction: Not enough Joule.");
+
+        // set false before execution to prevent re-entrancy attack vector.
         queuedTransactions[txHash] = false;
 
         bytes memory callData;
@@ -127,6 +131,12 @@ contract Timelock {
 
         // solium-disable-next-line security/no-call-value
         (bool success, bytes memory returnData) = target.call.value(value)(callData);
+
+        // NO NEED to rollback quota, like used = used.add(value) when execution failed,
+        // because revert tx will rollback the whole function logic
+        // including queuedTransactions[txHash] = false above,
+        // so it can be tried to execute again.
+
         require(success, "Timelock::executeTransaction: Transaction execution reverted.");
 
         emit ExecuteTransaction(txHash, target, value, signature, data, eta);
