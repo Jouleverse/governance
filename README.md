@@ -77,7 +77,7 @@ GT应剩余：1000亿 - 3.36亿 = 996.64亿Joule
 
 (1) 调用Timelock生态合约的incUsage方法，传入参数 delta * 10^18 = 71999999 * 10^18 （需要用GT调用其queueTransaction执行incUsage）
 
-(2) 从GT合约转入归属核心的799.28亿Joule到Timelock生态合约
+(2) 从GT合约转入归属生态的799.28亿Joule到Timelock生态合约
 
 (3) 执行完成后，检查各项状态数值，确认正确无误：
 
