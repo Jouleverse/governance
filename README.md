@@ -8,6 +8,9 @@
 5. [治理程序完成首次链下模拟运行，完成JIP-5预算1.44亿Joule的批准及首批7200万Joule的拨款](https://github.com/Jouleverse/jips)，检验了治理程序的设计和细节
 6. Timelock(时间锁)部署，初步完成对于tokenomics的“永久固定化”
 
+里程碑：
+- 2025.5.15：全部Joule完成迁移，从GT迁移到两个时间锁合约中，严格按照Joulenomics（焦耳经济学）释放/解锁，彻底杜绝了多签人的干预可能性
+
 ## Timelock
 
 Jouleverse Timelock模块分成两个部署实例：用于锁定200亿Joule能量的Timelock core，以及用于锁定800亿Joule能量的Timelock eco。它们的部署参数、步骤和结果如下：
